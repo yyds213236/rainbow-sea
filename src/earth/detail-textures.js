@@ -1,3 +1,4 @@
+// 彩虹海 modification: honor cancellation and wait before synchronous GPU work.
 import * as THREE from 'three';
 
 /** Bound the native 8K source to the device's texture/memory budget. */
@@ -7,14 +8,19 @@ export function detailTextureWidth({ maxTextureSize = 8192, compact = false, dev
   return 2 ** Math.floor(Math.log2(Math.max(1, limit)));
 }
 
-export async function loadDetailTextures(assets, renderer, width) {
+export async function loadDetailTextures(assets, renderer, width, { beforeUpload, signal } = {}) {
   const loader = new THREE.TextureLoader();
   const loaded = [];
   try {
     for (const name of ['earth-day-8k', 'earth-night-8k']) {
+      signal?.throwIfAborted();
       if (!assets[name]) throw new Error('高清地球纹理不可用');
       const texture = await loader.loadAsync(assets[name]);
       loaded.push(texture);
+      await texture.image.decode?.();
+      signal?.throwIfAborted();
+      if (beforeUpload) await beforeUpload(signal);
+      signal?.throwIfAborted();
       // Downsample only the GPU upload for phones; preserve original source files.
       if (texture.image.width > width) {
         const canvas = document.createElement('canvas');

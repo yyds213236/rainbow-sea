@@ -1,3 +1,4 @@
+// 彩虹海 modification: frame the subject clear of the navigation chrome.
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -49,13 +50,14 @@ export function createPipeline(renderer, scene, camera) {
 
   let observationFraming = 0;
   let width = innerWidth, height = innerHeight, compact = mobile();
+  let previousPixels = renderer.getPixelRatio();
 
   function applyFraming() {
     camera.aspect = width / height;
     // Leave room for the observation sheet without jumping the shared globe.
     const offsetY = height * THREE.MathUtils.lerp(-.045, .03, observationFraming);
-    camera.setViewOffset(width, height, compact ? 0 : -width * .105,
-      compact ? offsetY : 0, width, height);
+    camera.setViewOffset(width, height, compact ? 0 : -width * .12,
+      compact ? offsetY : height * .04, width, height);
   }
 
   function updateFraming(earthObservation, dt) {
@@ -74,10 +76,11 @@ export function createPipeline(renderer, scene, camera) {
     compact = mobile();
     const pixels = renderPixelRatio({ width: w, height: h, pixelRatio: devicePixelRatio,
       compact });
-    renderer.setPixelRatio(pixels);
+    if (pixels !== previousPixels) renderer.setPixelRatio(pixels);
     renderer.setSize(w, h);
     applyFraming();
-    composer.setPixelRatio(pixels);
+    if (pixels !== previousPixels) composer.setPixelRatio(pixels);
+    previousPixels = pixels;
     composer.setSize(w, h);
     for (const stars of world?.starFields || [world?.galaxy, world?.backgroundStars]) {
       if (stars) stars.material.uniforms.uRatio.value = pixels;

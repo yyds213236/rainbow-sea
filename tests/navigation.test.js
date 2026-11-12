@@ -1,14 +1,21 @@
+// 彩虹海 modification: regression coverage for smoothed navigation.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { data, specials } from '../src/universe/catalog.js';
 
-globalThis.matchMedia = () => ({ matches: false });
+let updateMotionPreference;
+globalThis.matchMedia = () => ({
+  matches: false,
+  addEventListener(type, listener) {
+    if (type === 'change') updateMotionPreference = listener;
+  },
+});
 globalThis.innerWidth = 1440;
 globalThis.innerHeight = 900;
-const { createNavigation } = await import('../src/core/camera.js');
+const { createNavigation, wheelZoomFactor } = await import('../src/core/camera.js');
 
-function fixture() {
+function fixture(clock) {
   const bodies = new Map(data.map(body => [body.id, {
     ...body,
     position: new THREE.Vector3(
@@ -37,7 +44,7 @@ function fixture() {
   const camera = new THREE.PerspectiveCamera(43, 1.6, .001, 350000);
   const controls = { target: new THREE.Vector3(), minDistance: 1.13, maxDistance: 180000, enabled: true, update() {} };
   const info = [], stages = [], toasts = [];
-  const navigation = createNavigation({ camera, controls, world, onInfo: id => info.push(id), onStage: stage => stages.push(stage), toast: text => toasts.push(text) });
+  const navigation = createNavigation({ camera, controls, world, onInfo: id => info.push(id), onStage: stage => stages.push(stage), toast: text => toasts.push(text), clock });
   navigation.initialize();
   return { camera, controls, world, navigation, info, stages, toasts };
 }
@@ -97,6 +104,167 @@ test('zoom clamps to control limits and interrupts an active flight', () => {
   assert.equal(controls.enabled, true);
   navigation.zoom(1e20);
   near(navigation.getState().distance, controls.maxDistance, 'maximum zoom');
+});
+
+test('wheel input translates pixels, lines and pages into bounded zoom steps', () => {
+  assert.equal(wheelZoomFactor(2, 1, 800), wheelZoomFactor(32, 0, 800));
+  assert.equal(wheelZoomFactor(1, 2, 800), wheelZoomFactor(400, 0, 800));
+  near(wheelZoomFactor(130, 0, 800) * wheelZoomFactor(-130, 0, 800), 1, 'opposite steps');
+});
+
+test('animated zoom accumulates repeated input and eases to its target independent of frame rate', () => {
+  function advanceAt(fps, frames) {
+    const { navigation } = fixture();
+    const original = navigation.getState().distance;
+    navigation.zoomBy(2);
+    navigation.zoomBy(2);
+    near(navigation.getState().distance, original, 'input does not jump the camera');
+    for (let frame = 0; frame < frames; frame++) navigation.update(1 / fps, 1000, () => {});
+    return navigation.getState().distance;
+  }
+  const intermediate = advanceAt(60, 6);
+  assert.ok(intermediate > 4.65 && intermediate < 4.65 * 4);
+  near(intermediate, advanceAt(120, 12), 'equal elapsed time');
+  near(advanceAt(60, 60), 4.65 * 4, 'combined zoom destination');
+});
+
+test('fly to the opposite side of the Earth follows a continuous arc', () => {
+  let time = 1000;
+  const { navigation, camera, world } = fixture(() => time);
+  camera.position.copy(world.earth.position).add(new THREE.Vector3(-3, 0, 0));
+  navigation.focusEarth({ lat: 0, lon: 0, distance: 2 });
+  time += 675;
+  navigation.update(.016, time, () => {});
+  const halfway = camera.position.clone().sub(world.earth.position);
+  near(halfway.length(), Math.sqrt(6), 'mid-flight distance');
+  near(halfway.x, 0, 'halfway around the globe');
+  time += 675;
+  navigation.update(.016, time, () => {});
+  near(camera.position.x - world.earth.position.x, 2, 'arrive on the opposite side');
+  assert.equal(navigation.getState().flight, false);
+});
+
+test('a new destination after a pause starts at the visible point and settles at the last choice', () => {
+  let time = 1000;
+  const { navigation, camera, controls, world } = fixture(() => time);
+  navigation.flyTo('galaxy');
+  time += 400;
+  navigation.update(.016, time, () => {});
+  const inFlight = camera.position.clone();
+  navigation.update(0, time, () => {});
+  near(camera.position.distanceTo(inFlight), 0, 'paused visual clock');
+  navigation.flyTo('mars');
+  navigation.flyTo('jupiter');
+  near(camera.position.distanceTo(inFlight), 0, 'no jump on retarget');
+  time += 1350;
+  navigation.update(.016, time, () => {});
+  navigation.updateStage();
+  near(controls.target.distanceTo(world.getPosition('jupiter')), 0, 'last destination wins');
+  assert.equal(navigation.getState().flight, false);
+});
+
+test('only settled overview arrivals announce navigation and a new flight clears the old status', () => {
+  let time = 1000;
+  const { navigation, toasts } = fixture(() => time);
+  function advance(milliseconds) {
+    time += milliseconds;
+    navigation.update(.016, time, () => {});
+    navigation.updateStage();
+  }
+  navigation.flyTo('galaxy');
+  advance(2000);
+  assert.equal(navigation.getState().stage, 'galaxy');
+  assert.equal(navigation.getState().flight, true);
+  assert.deepEqual(toasts.filter(Boolean), []);
+  navigation.flyTo('saturn');
+  advance(1350);
+  assert.deepEqual(toasts.filter(Boolean), []);
+
+  navigation.flyTo('galaxy');
+  advance(2600);
+  assert.match(toasts.at(-1), /进入银河系/);
+  navigation.flyTo('saturn');
+  assert.equal(toasts.at(-1), '');
+
+  navigation.flyTo('iss');
+  assert.match(toasts.at(-1), /正在接近/);
+  advance(1350);
+  assert.equal(toasts.at(-1), '');
+});
+
+test('the initial Earth fits inside a narrow portrait viewport', () => {
+  const { navigation, camera } = fixture();
+  const originalWidth = globalThis.innerWidth;
+  try {
+    globalThis.innerWidth = 320;
+    camera.aspect = 320 / 844;
+    navigation.initialize();
+    const distance = navigation.getState().distance;
+    const halfAngle = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect;
+    const projectedHalfWidth = 1 / Math.sqrt(distance ** 2 - 1) / halfAngle;
+    assert.ok(projectedHalfWidth < .90, 'globe clears both sides of the viewport');
+  } finally {
+    globalThis.innerWidth = originalWidth;
+  }
+});
+
+test('Saturn stays selected and centered at its fitted portrait distance until zooming out', () => {
+  const originalWidth = globalThis.innerWidth, originalHeight = globalThis.innerHeight;
+  try {
+    for (const [width, height] of [[320, 700], [390, 844]]) {
+      let time = 1000;
+      const { navigation, camera, controls, world } = fixture(() => time);
+      globalThis.innerWidth = width;
+      globalThis.innerHeight = height;
+      camera.aspect = width / height;
+      navigation.flyTo('saturn', { immediate: true });
+      time += 2;
+      navigation.update(.016, time, () => {});
+      navigation.updateStage();
+      const arrival = navigation.getState();
+      assert.ok(arrival.distance > world.getData('saturn').r * 10, 'portrait ring fit exceeds the old close limit');
+      assert.equal(arrival.selected, 'saturn');
+      assert.equal(arrival.stage, 'earth');
+
+      for (let frame = 0; frame < 30; frame++) {
+        time += 16;
+        navigation.update(.016, time, () => {});
+      }
+      near(controls.target.distanceTo(world.getPosition('saturn')), 0, 'tracking stays on Saturn');
+      navigation.zoom(1.05);
+      navigation.update(.016, time, () => {});
+      navigation.updateStage();
+      assert.equal(navigation.getState().selected, 'saturn', 'a small zoom step keeps the close view');
+      near(controls.target.distanceTo(world.getPosition('saturn')), 0, 'small zoom remains centered on Saturn');
+      navigation.zoom(1.5);
+      navigation.update(.016, time, () => {});
+      navigation.updateStage();
+      assert.equal(navigation.getState().stage, 'solar');
+      assert.equal(navigation.getState().selected, 'solar');
+    }
+  } finally {
+    globalThis.innerWidth = originalWidth;
+    globalThis.innerHeight = originalHeight;
+  }
+});
+
+test('reduced motion settles an active flight and applies zoom immediately', () => {
+  let time = 1000;
+  const { navigation } = fixture(() => time);
+  navigation.flyTo('galaxy');
+  time += 200;
+  navigation.update(.016, time, () => {});
+  assert.equal(navigation.getState().flight, true);
+  try {
+    updateMotionPreference({ matches: true });
+    navigation.update(.016, time, () => {});
+    assert.equal(navigation.getState().flight, false);
+    near(navigation.getState().distance, 68000, 'arrives without continuing the animation');
+    navigation.zoomBy(2);
+    near(navigation.getState().distance, 136000, 'reduced-motion zoom is immediate');
+  } finally {
+    updateMotionPreference({ matches: false });
+  }
 });
 
 test('cancelFlight restores controls and preserves the current camera', () => {

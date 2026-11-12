@@ -1,4 +1,4 @@
-import { mobile, reducedMotion } from '../core/math.js';
+// Modified for 彩虹海: destination focus is managed by the dock, with a plain heading.
 
 export function createInfoPanel({ getData }) {
   const $ = id => document.getElementById(id);
@@ -12,10 +12,6 @@ export function createInfoPanel({ getData }) {
     $('info-name').classList.toggle('long-name', data.cn.length >= 5
       || (data.cn.length >= 4 && Boolean(data.kind || data.parentGalaxy)));
     $('info-name').textContent = data.cn;
-    const index = document.createElement('span');
-    index.className = 'object-index';
-    index.textContent = data.index;
-    $('info-name').append(index);
     $('info-description').textContent = data.desc;
     $('stat-label-1').textContent = data.stat1 || '平均直径';
     $('stat-label-2').textContent = data.stat2 || '公转周期';
@@ -48,12 +44,6 @@ export function createInfoPanel({ getData }) {
       source.href = data.sourceUrl;
       source.textContent = (data.modelStatus === 'illustration' ? '示意背景资料' : data.sourceLabel || '天体资料') + ' ↗';
     }
-    document.querySelectorAll('.planet-button').forEach(button => {
-      button.classList.toggle('active', button.dataset.id === id);
-      button.setAttribute('aria-pressed', String(button.dataset.id === id));
-    });
-    const active = document.querySelector('.planet-button.active');
-    if (active && mobile()) active.scrollIntoView({ behavior: reducedMotion ? 'instant' : 'smooth', block: 'nearest', inline: 'center' });
   }
 
   return { update };

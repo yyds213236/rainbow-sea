@@ -1,9 +1,10 @@
+// 彩虹海 modification: defer expensive detail resources until an idle frame.
 import * as THREE from 'three';
 import { detailTextureWidth, loadDetailTextures } from './detail-textures.js';
 
 /** Both modes share the same detailed Earth and its original day/night lighting. */
 export function createEarthDetail({ world, renderer, assets, compact = false,
-  deviceMemory = globalThis.navigator?.deviceMemory ?? 8, load = loadDetailTextures }) {
+  deviceMemory = globalThis.navigator?.deviceMemory ?? 8, load = loadDetailTextures, beforeUpload }) {
   const { earth, clouds } = world;
   const material = earth.mesh.material, atmosphere = earth.atmosphere;
   const original = {
@@ -14,6 +15,7 @@ export function createEarthDetail({ world, renderer, assets, compact = false,
   };
   const width = detailTextureWidth({ maxTextureSize: renderer.capabilities.maxTextureSize, compact, deviceMemory });
   let observation = false, disposed = false, detail, geometry, pending, status = 'idle', error = '';
+  let controller;
 
   function apply() {
     material.uniforms.uDay.value = detail ? detail.day : original.day;
@@ -27,19 +29,22 @@ export function createEarthDetail({ world, renderer, assets, compact = false,
 
   function prepare() {
     if (disposed || pending || detail) return pending;
-    if (!geometry) geometry = new THREE.SphereGeometry(1, 256, 160);
-    apply();
     if (width <= 2048) { status = 'fallback'; return; }
     status = 'loading';
-    pending = load(assets, renderer, width).then(result => {
+    error = '';
+    controller = new AbortController();
+    pending = load(assets, renderer, width, { beforeUpload, signal: controller.signal }).then(result => {
       if (disposed) { result.day.dispose(); result.night.dispose(); return; }
       detail = result;
+      geometry = new THREE.SphereGeometry(1, 256, 160);
       status = 'ready';
       // A mode change never downgrades or relights the already loaded Earth.
       apply();
     }).catch(reason => {
-      if (!disposed) { status = 'fallback'; error = reason.message; }
-    }).finally(() => { pending = null; });
+      if (disposed) return;
+      status = reason?.name === 'AbortError' ? 'idle' : 'fallback';
+      error = reason?.message || '';
+    }).finally(() => { pending = null; controller = null; });
     return pending;
   }
 
@@ -51,12 +56,14 @@ export function createEarthDetail({ world, renderer, assets, compact = false,
 
   return {
     prepare, setObservation,
+    get status() { return status; },
     ready: () => pending ?? Promise.resolve(),
     getState: () => ({ shared: true, observation, status, textureWidth: detail ? detail.width : 2048,
       decorativeCloudsVisible: clouds.visible, error }),
     dispose() {
       if (disposed) return;
       disposed = true;
+      controller?.abort();
       observation = false;
       geometry?.dispose();
       detail?.day.dispose(); detail?.night.dispose();

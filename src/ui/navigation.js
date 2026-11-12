@@ -1,3 +1,4 @@
+// Modified for 彩虹海: focus-safe shortcuts, stage state and eased zoom controls.
 import { bindWallpaperMode } from './wallpaper.js';
 import { reducedMotion } from '../core/math.js';
 import { bindBodyPicking } from './picking.js';
@@ -6,7 +7,13 @@ import { createTrajectoryPanel } from './trajectory-panel.js';
 
 export function bindNavigationUI({ renderer, camera, world, navigation, assets, toast, onPick, controls, wallpaperView, setSpaceColor }) {
   const $ = id => document.getElementById(id);
-  const { flyTo, zoom } = navigation;
+  const { flyTo, zoomBy: zoom } = navigation;
+  const stageButtons = [...document.querySelectorAll('[data-view]')];
+  const sceneButtons = stageButtons.filter(button => button.closest('.scenes'));
+  const scaleButtons = stageButtons.filter(button => !button.closest('.scenes'));
+  const speedSelect = $('speed');
+  const fullscreenButton = $('fullscreen');
+  let activeScene, activeScale;
   let paused = reducedMotion, speed = 1, orbitsVisible = true, labelsVisible = true;
   let destinations, trajectoryPanel;
 
@@ -19,15 +26,30 @@ export function bindNavigationUI({ renderer, camera, world, navigation, assets, 
     $('pause').title = paused ? '继续（空格）' : '暂停（空格）';
   }
 
-  function updateStage(mode) {
-    const { activeGalaxyId, activeSystemId } = navigation.getState();
-    document.querySelectorAll('[data-view]').forEach(button => {
-      const active = button.dataset.view === mode && (mode === 'local-group'
-        || (activeGalaxyId === 'galaxy' && (mode === 'galaxy' || activeSystemId === 'solar')));
+  function setCurrentView(buttons, view) {
+    for (const button of buttons) {
+      const active = button.dataset.view === view;
       button.classList.toggle('active', active);
-      button.setAttribute('aria-pressed', String(active));
-    });
-    destinations?.update();
+      if (active) button.setAttribute('aria-current', 'true');
+      else button.removeAttribute('aria-current');
+    }
+  }
+
+  function updateStage(mode, state = navigation.getState()) {
+    const { activeGalaxyId, activeSystemId, focusBody } = state;
+    const scale = mode === 'local-group' || (activeGalaxyId === 'galaxy' && (mode === 'galaxy' || activeSystemId === 'solar'))
+      ? mode : null;
+    // A close view of another planet is still part of the Solar System tab.
+    const scene = scale === 'earth' && !['earth', 'iss'].includes(focusBody) ? 'solar' : scale;
+    if (scene !== activeScene) {
+      activeScene = scene;
+      setCurrentView(sceneButtons, scene);
+    }
+    if (scale !== activeScale) {
+      activeScale = scale;
+      setCurrentView(scaleButtons, scale);
+    }
+    destinations?.update(state);
     trajectoryPanel?.update();
     $('toggle-trajectories').setAttribute('aria-pressed', String(mode === 'trajectory'));
   }
@@ -36,7 +58,7 @@ export function bindNavigationUI({ renderer, camera, world, navigation, assets, 
     setPaused(settings.paused);
     speed = settings.speed;
     labelsVisible = settings.labelsVisible;
-    $('speed').firstChild.textContent = speed + '×';
+    speedSelect.value = String(speed);
     $('toggle-orbits').setAttribute('aria-pressed', String(orbitsVisible));
     $('toggle-labels').setAttribute('aria-pressed', String(labelsVisible));
   }
@@ -49,9 +71,13 @@ export function bindNavigationUI({ renderer, camera, world, navigation, assets, 
       ? `${deployment.targetExpanded ? '正在展开' : '正在收拢'} · ${deployment.phase} · 部署动画为压缩示意`
       : deployment.progress === 1 ? '十八片曲面镜 · 五层薄膜 · 收拢仅作部署演示' : '模型已收拢 · 简化部署回放，非在轨操作';
 
-    const { stage, focusBody, activeGalaxyId, activeSystemId } = navigation.getState();
-    updateStage(stage);
-    if (stage === 'trajectory') {
+    const state = navigation.getState();
+    const { stage, focusBody, activeGalaxyId, activeSystemId } = state;
+    updateStage(stage, state);
+    if (state.flight) {
+      $('view-caption').textContent = state.returning ? '正在返回此前视角' : `正在飞往${world.getData(state.selected).cn}`;
+      $('view-distance').textContent = '';
+    } else if (stage === 'trajectory') {
       $('view-caption').textContent = '太阳系运动轨迹';
       $('view-distance').textContent = world.motionTrajectories.getState().referenceFrame === 'solar'
         ? '太阳参照 · 观察行星公转' : '银河参照 · 观察前进与公转';
@@ -100,10 +126,16 @@ export function bindNavigationUI({ renderer, camera, world, navigation, assets, 
     }
   }
 
+  function syncFullscreen() {
+    const active = Boolean(document.fullscreenElement);
+    fullscreenButton.setAttribute('aria-pressed', String(active));
+    fullscreenButton.title = active ? '退出全屏（F）' : '全屏（F）';
+  }
+
   destinations = createDestinations({ world, navigation, assets });
   trajectoryPanel = createTrajectoryPanel({ world, navigation });
   $('toggle-trajectories').onclick = () => flyTo(navigation.getState().stage === 'trajectory' ? 'solar' : 'trajectory');
-  document.querySelectorAll('[data-view]').forEach(button => button.onclick = () => flyTo(button.dataset.view));
+  stageButtons.forEach(button => button.onclick = () => flyTo(button.dataset.view));
   $('home').onclick = event => { event.preventDefault(); flyTo('earth'); };
   $('night-view').onclick = () => flyTo('earth', { night: true });
   $('station-view').onclick = () => flyTo('iss');
@@ -112,10 +144,8 @@ export function bindNavigationUI({ renderer, camera, world, navigation, assets, 
   $('zoom-in').onclick = () => zoom(.72);
   $('zoom-out').onclick = () => zoom(1.45);
   $('pause').onclick = () => setPaused(!paused);
-  $('speed').onclick = () => {
-    const speeds = [.25, 1, 5, 20];
-    speed = speeds[(speeds.indexOf(speed) + 1) % speeds.length];
-    $('speed').firstChild.textContent = speed + '×';
+  speedSelect.onchange = () => {
+    speed = Number(speedSelect.value);
     toast('演示时间流速 ' + speed + '×');
   };
   function setOrbitsVisible(value) {
@@ -128,7 +158,9 @@ export function bindNavigationUI({ renderer, camera, world, navigation, assets, 
     $('toggle-labels').setAttribute('aria-pressed', String(labelsVisible));
   };
   const wallpaper = bindWallpaperMode(renderer.domElement, { world, controls, navigation, view: wallpaperView, setSpaceColor, setOrbitsVisible });
-  $('fullscreen').onclick = fullscreen;
+  fullscreenButton.onclick = fullscreen;
+  document.addEventListener('fullscreenchange', syncFullscreen);
+  syncFullscreen();
   $('help-button').onclick = () => $('help-dialog').showModal();
   $('credits-button').onclick = () => $('credits-dialog').showModal();
   document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => button.closest('dialog').close());
@@ -139,28 +171,29 @@ export function bindNavigationUI({ renderer, camera, world, navigation, assets, 
     }
   });
   addEventListener('keydown', event => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.isComposing || event.keyCode === 229) return;
     if (document.querySelector('dialog[open]')) return;
     const tag = event.target.tagName;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || event.target.isContentEditable) return;
+    const key = event.key.toLowerCase();
+    if (event.repeat && !['+', '=', '-'].includes(key)) return;
     if (wallpaper.active) {
-      if (['i', 'Escape'].includes(event.key)) wallpaper.exit();
+      if (key === 'i' || key === 'escape') wallpaper.exit();
       if (['ArrowLeft','ArrowUp','ArrowRight','ArrowDown'].includes(event.key)) { event.preventDefault(); wallpaper.next(['ArrowRight','ArrowDown'].includes(event.key) ? 1 : -1); }
       return;
     }
-    if (['BUTTON', 'A'].includes(tag) && event.code === 'Space') return;
+    if (['BUTTON', 'A', 'SUMMARY'].includes(tag) && event.code === 'Space') return;
     if (event.code === 'Space') { event.preventDefault(); setPaused(!paused); }
-    if (event.key === '+' || event.key === '=') zoom(.8);
-    if (event.key === '-') zoom(1.25);
-    if (event.key.toLowerCase() === 'h') flyTo('earth');
-    if (event.key.toLowerCase() === 'f') fullscreen();
-    if (event.key.toLowerCase() === 'i') {
-      wallpaper.toggle();
-    }
-    if (event.key === 'Escape') wallpaper.exit();
-    if (event.key === '?') $('help-dialog').showModal();
+    if (key === '+' || key === '=') zoom(.8);
+    if (key === '-') zoom(1.25);
+    if (key === 'h') flyTo('earth');
+    if (key === 'f') fullscreen();
+    if (key === 'i') wallpaper.toggle();
+    if (key === '?') $('help-dialog').showModal();
   });
   bindBodyPicking({ renderer, camera, world, navigation, onPick, isEnabled: () => !wallpaper.active });
   setPaused(paused);
+  updateStage(navigation.stage());
 
   return { wallpaper, getState: () => ({ paused, speed, orbitsVisible, labelsVisible }), setPaused, restoreState, updateStage, updateHud };
 }

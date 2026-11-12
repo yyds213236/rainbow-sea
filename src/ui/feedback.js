@@ -1,11 +1,21 @@
+// 彩虹海 modification: clear navigation feedback independently of control messages.
 const $ = id => document.getElementById(id);
-let toastTimer;
+let toastTimer, toastSource;
 
-export function toast(text) {
-  $('toast').textContent = text;
-  $('toast').classList.add('show');
+export function toast(text, source = 'controls') {
+  if (!text && source !== toastSource) return;
+  const status = $('toast');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2600);
+  status.textContent = text;
+  status.classList.toggle('show', Boolean(text));
+  toastSource = text ? source : null;
+  if (text) {
+    toastTimer = setTimeout(() => {
+      status.classList.remove('show');
+      status.textContent = '';
+      toastSource = null;
+    }, 2600);
+  }
 }
 
 export function fail(message) {

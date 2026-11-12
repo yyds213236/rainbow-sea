@@ -1,3 +1,4 @@
+// 彩虹海 modification: regression coverage for cancelled pointer gestures.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
@@ -67,4 +68,20 @@ test('drag and pinch gestures never select an overlay or celestial body', () => 
   pointer('pointerup');
   assert.equal(picked, 0);
   assert.deepEqual(selected, []);
+});
+
+test('a drag ending where it started, a right click, and a cancelled press are not picks', () => {
+  const { pointer, selected } = setup();
+  pointer('pointerdown');
+  pointer('pointermove', { clientX: 550 });
+  pointer('pointerup');
+  pointer('pointerdown', { button: 2 });
+  pointer('pointerup', { button: 2 });
+  pointer('pointerdown');
+  pointer('lostpointercapture');
+  pointer('pointerup');
+  assert.deepEqual(selected, []);
+  pointer('pointerdown');
+  pointer('pointerup');
+  assert.deepEqual(selected, ['earth']);
 });

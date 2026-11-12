@@ -1,3 +1,4 @@
+// 彩虹海 modification: retain a predictable focus origin for compact sheets.
 /** Move existing controls into small-screen sheets, preserving their handlers and state. */
 export function bindCompactUI() {
   const query=matchMedia('(max-width: 700px), (max-height: 600px)');
@@ -29,7 +30,14 @@ export function bindCompactUI() {
   }
   const details=sheet('compact-details','天体详情'), controls=sheet('compact-controls','探索与控制');
   const extra=document.createElement('div');extra.className='compact-extra';controls.append(extra);
-  infoButton.onclick=()=>details.showModal();exploreButton.onclick=()=>controls.showModal();
+  function openSheet(dialog, trigger) {
+    // Safari does not always focus a button when clicked. Give the dialog an
+    // explicit focus origin so closing it returns to the opener on all devices.
+    trigger.focus({ preventScroll: true });
+    dialog.showModal();
+  }
+  infoButton.onclick = () => openSheet(details, infoButton);
+  exploreButton.onclick = () => openSheet(controls, exploreButton);
   const placements=[];
   function move(selector,parent) {
     const node=document.querySelector(selector);if(!node)return;

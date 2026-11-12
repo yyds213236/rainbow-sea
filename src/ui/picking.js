@@ -1,3 +1,4 @@
+// 彩虹海 modification: suppress picks after cancelled and backtracking drags.
 import * as THREE from 'three';
 
 /** Distinguish a click from drag or pinch before picking a scene body. */
@@ -12,22 +13,28 @@ export function bindBodyPicking({ renderer, camera, world, navigation, onPick, i
   }
 
   renderer.domElement.addEventListener('pointerdown', event => {
-    if (!isEnabled()) return;
+    if (!isEnabled() || event.button > 0) return;
     touches.add(event.pointerId);
     if (touches.size > 1) {
       multiTouch = true;
       press = null;
     } else {
       multiTouch = false;
-      press = { x: event.clientX, y: event.clientY, t: performance.now() };
+      press = { id: event.pointerId, x: event.clientX, y: event.clientY, t: performance.now() };
     }
     if (navigation.getState().flight) navigation.cancelFlight();
   }, { capture: true });
 
+  renderer.domElement.addEventListener('pointermove', event => {
+    if (press?.id === event.pointerId && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 5) press = null;
+  });
+
   renderer.domElement.addEventListener('pointerup', event => {
     touches.delete(event.pointerId);
-    if (!isEnabled() || event.defaultPrevented || !press || multiTouch || Math.hypot(event.clientX - press.x, event.clientY - press.y) > 5 || performance.now() - press.t > 450) return;
+    if (press?.id !== event.pointerId) return;
+    const start = press;
     press = null;
+    if (!isEnabled() || event.defaultPrevented || multiTouch || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5 || performance.now() - start.t > 450) return;
     pointer.set(event.clientX / innerWidth * 2 - 1, -event.clientY / innerHeight * 2 + 1);
     raycaster.setFromCamera(pointer, camera);
     if (onPick?.(raycaster, event)) return;
@@ -65,11 +72,10 @@ export function bindBodyPicking({ renderer, camera, world, navigation, onPick, i
     if (destination) navigation.flyTo(destination);
   });
 
-  renderer.domElement.addEventListener('pointercancel', event => {
+  function cancelPointer(event) {
     touches.delete(event.pointerId);
-    press = null;
-  });
-  renderer.domElement.addEventListener('wheel', () => {
-    if (isEnabled() && navigation.getState().flight) navigation.cancelFlight();
-  }, { passive: true, capture: true });
+    if (press?.id === event.pointerId) press = null;
+  }
+  renderer.domElement.addEventListener('pointercancel', cancelPointer);
+  renderer.domElement.addEventListener('lostpointercapture', cancelPointer);
 }

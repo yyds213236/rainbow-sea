@@ -1,3 +1,4 @@
+// 彩虹海 modification: cover aborted HD preparation and retries.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
@@ -94,6 +95,38 @@ test('missing detail maps leave both modes usable on the original texture', asyn
     assert.equal(controller.getState().textureWidth, 2048);
   }
   controller.dispose();
+});
+
+test('a deferred detail upload keeps the base texture and can retry later', async () => {
+  let attempts = 0;
+  const detail = { day: new THREE.Texture(), night: new THREE.Texture(), width: 8192 };
+  const { controller, material, day, world, geometry } = fixture(async () => {
+    if (++attempts === 1) throw new DOMException('idle deadline', 'AbortError');
+    return detail;
+  });
+  await controller.prepare();
+  assert.equal(controller.status, 'idle');
+  assert.equal(material.uniforms.uDay.value, day);
+  assert.equal(world.earth.mesh.geometry, geometry);
+  await controller.prepare();
+  assert.equal(controller.status, 'ready');
+  assert.equal(material.uniforms.uDay.value, detail.day);
+  controller.dispose();
+});
+
+test('disposing while waiting for idle cancels the upload and keeps base resources', async () => {
+  let signal;
+  const { controller, material, day, world, geometry } = fixture((assets, renderer, width, options) => {
+    signal = options.signal;
+    return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  });
+  const pending = controller.prepare();
+  assert.equal(signal.aborted, false);
+  controller.dispose();
+  assert.equal(signal.aborted, true);
+  await pending;
+  assert.equal(material.uniforms.uDay.value, day);
+  assert.equal(world.earth.mesh.geometry, geometry);
 });
 
 test('disposing during load releases late GPU maps without changing the Earth', async () => {

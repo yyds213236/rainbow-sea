@@ -1,9 +1,12 @@
+// 彩虹海 modification: match the compact layout and observe motion preferences.
 import * as THREE from "three";
 const TAU = Math.PI * 2;
 const clamp = THREE.MathUtils.clamp;
 const smooth = (a, b, x) => THREE.MathUtils.smoothstep(x, a, b);
-const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const mobile = () => innerWidth <= 600;
+const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
+let reducedMotion = motionPreference.matches;
+motionPreference.addEventListener?.('change', event => { reducedMotion = event.matches; });
+const mobile = () => globalThis.innerWidth <= 700 || globalThis.innerHeight <= 600;
 let randomSeed = 20260906;
 function random() {
   randomSeed = Math.imul(randomSeed, 1664525) + 1013904223 | 0;
